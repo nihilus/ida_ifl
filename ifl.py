@@ -10,7 +10,7 @@
 """
 (c) hasherezade, 2015 run via IDA Pro 6.8
 """
-__VERSION__ = '1.0'
+__VERSION__ = '1.2'
 __AUTHOR__ = 'hasherezade'
 
 PLUGIN_NAME = "IFL - Interactive Functions List"
@@ -636,11 +636,13 @@ class FunctionsListForm_t(PluginForm):
     def _saveFunctionsNames(self, file_name):
         if file_name is None or len(file_name) == 0:
             return False
+        delim = ","
         fn_list = list()
         for func in Functions():
             start = GetFunctionAttr(func, FUNCATTR_START)
             func_name = _getFunctionNameAt(start)
-            line = "%lx : %s" %(start, func_name)
+            start_rva = va_to_rva(start)
+            line = "%lx%c%s" %(start_rva, delim, func_name)
             fn_list.append(line)   
         idaapi.msg(str(file_name))
         with open(file_name, 'w') as f:
@@ -653,16 +655,21 @@ class FunctionsListForm_t(PluginForm):
         if file_name is None or len(file_name) == 0:
             return False
         curr_functions = self._listFunctionsAddr()
-        delim = ":"
+        delim = "," # new delimiter (for CSV format)
+        delim2 = ":" # old delimiter
         loaded = 0
         with open(file_name, 'r') as f:
             for line in f.readlines():
                 line = line.strip()
                 fn = line.split(delim)
                 if len(fn) != 2:
+                    fn = line.split(delim2) # try old delimiter
+                if len(fn) != 2:
                     continue
                 start = int(fn[0].strip(), 16)
                 func_name = fn[1].strip()
+                if start < idaapi.get_imagebase(): # it is RVA
+                    start = rva_to_va(start) # convert to VA
                 if start in curr_functions:
                     if self.subDataManager.setFunctionName(start, func_name) == True:
                         loaded += 1
@@ -808,12 +815,24 @@ class FunctionsListForm_t(PluginForm):
         self._update_function_name(data)
         
     def filterByColumn(self, col_num, str):
-        self.addr_sorted_model.setFilterRegExp(QtCore.QRegExp(str, QtCore.Qt.CaseInsensitive, QtCore.QRegExp.FixedString));
+        filter_type = QtCore.QRegExp.FixedString
+        sensitivity = QtCore.Qt.CaseInsensitive
+        if self.criterium_id != 0:
+            filter_type = QtCore.QRegExp.RegExp
+        self.addr_sorted_model.setFilterRegExp(QtCore.QRegExp(str, sensitivity, filter_type));
         self.addr_sorted_model.setFilterKeyColumn(col_num)
         
     def filterChanged(self):
         self.filterByColumn(self.filter_combo.currentIndex(), self.filter_edit.text() )
-
+        
+    def criteriumChanged(self):
+        self.criterium_id = self.criterium_combo.currentIndex()
+        if self.criterium_id == 0:
+            self.filter_edit.setPlaceholderText("keyword")
+        else:
+            self.filter_edit.setPlaceholderText("regex")
+        self.filterChanged()
+        
     def OnCreate(self, form):
         """
         Called when the plugin form is created
@@ -823,6 +842,7 @@ class FunctionsListForm_t(PluginForm):
         self.functionsMap = dict()
         self.addr_list = []
         self._loadLocals()
+        self.criterium_id = 0
         
         # Get parent widget
         self.parent = self.FormToPySideWidget(form)
@@ -878,20 +898,27 @@ class FunctionsListForm_t(PluginForm):
         # Create filter
         self.filter_edit = QtGui.QLineEdit()
         self.filter_edit.setPlaceholderText("keyword")
-        self.filter_combo = QtGui.QComboBox()
+        self.filter_edit.textChanged.connect(self.filterChanged)
         
+        self.filter_combo = QtGui.QComboBox()
         self.filter_combo.addItems(TableModel_t.header_names)
         self.filter_combo.setCurrentIndex(TableModel_t.COL_NAME)
         #connect SIGNAL
-        self.filter_edit.textChanged.connect(self.filterChanged)
         self.filter_combo.activated.connect(self.filterChanged)
+        
+        self.criterium_combo = QtGui.QComboBox()
+        criteria = ["contains", "matches"]
+        self.criterium_combo.addItems(criteria)
+        self.criterium_combo.setCurrentIndex(0)
+        #connect SIGNAL
+        self.criterium_combo.activated.connect(self.criteriumChanged)
         
 
         filter_panel = QtGui.QFrame()
         filter_layout = QtGui.QHBoxLayout()
         filter_layout.addWidget(QtGui.QLabel("Where "))
         filter_layout.addWidget(self.filter_combo)
-        filter_layout.addWidget(QtGui.QLabel(" contains: "))
+        filter_layout.addWidget(self.criterium_combo)
         filter_layout.addWidget(self.filter_edit)
         
         filter_panel.setLayout(filter_layout)
@@ -948,7 +975,7 @@ class FunctionsListForm_t(PluginForm):
         return buttons_panel
         
     def importNames(self):
-        file_name, ext = QtGui.QFileDialog.getOpenFileName( None, "Export functions names", QtCore.QDir.homePath(), "TXT Files (*.txt);;All files (*)")
+        file_name, ext = QtGui.QFileDialog.getOpenFileName( None, "Export functions names", QtCore.QDir.homePath(), "CSV Files (*.csv);;TXT Files (*.txt);;All files (*)")
         if file_name is not None and len(file_name) > 0 :
             loaded = self._loadFunctionsNames(file_name)
             if loaded == 0:
@@ -957,7 +984,7 @@ class FunctionsListForm_t(PluginForm):
                 idaapi.info("Imported %d function names " % (loaded))
                 
     def exportNames(self):
-        file_name, ext = QtGui.QFileDialog.getSaveFileName( None, "Import functions names", QtCore.QDir.homePath(), "TXT Files (*.txt);;All files (*)")
+        file_name, ext = QtGui.QFileDialog.getSaveFileName( None, "Import functions names", QtCore.QDir.homePath(), "CSV Files (*.csv)")
         if file_name is not None and len(file_name) > 0 :
             if self._saveFunctionsNames(file_name) == False:
                 idaapi.warning("Failed exporting functions names!")
@@ -1065,3 +1092,4 @@ class funclister_t(idaapi.plugin_t):
 def PLUGIN_ENTRY():
     return funclister_t()
     
+
